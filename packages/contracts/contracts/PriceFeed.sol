@@ -54,7 +54,7 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
     // The last ETH good price seen from an oracle by Liquity
     uint public lastGoodPrice;
 
-    // The last ETH good asset seen from an oracle by Liquity
+    // The last ASSET good price seen from an oracle by Liquity
     uint public ASSETlastGoodPrice;
 
     bool public isAssetFrozen;
