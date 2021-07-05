@@ -25,7 +25,8 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
 
     string constant public NAME = "PriceFeed";
 
-    AggregatorV3Interface public priceAggregator;  // Mainnet Chainlink aggregator
+    AggregatorV3Interface public ETHpriceAggregator;  // Mainnet Chainlink aggregator
+    AggregatorV3Interface public ASSETpriceAggregator;  // Mainnet Chainlink aggregator
     ITellorCaller public tellorCaller;  // Wrapper contract that calls the Tellor system
 
     // Core Liquity contracts
@@ -50,8 +51,13 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
     */
     uint constant public MAX_PRICE_DIFFERENCE_BETWEEN_ORACLES = 5e16; // 5%
 
-    // The last good price seen from an oracle by Liquity
+    // The last ETH good price seen from an oracle by Liquity
     uint public lastGoodPrice;
+
+    // The last ETH good asset seen from an oracle by Liquity
+    uint public ASSETlastGoodPrice;
+
+    bool public isAssetFrozen;
 
     struct ChainlinkResponse {
         uint80 roundId;
@@ -76,38 +82,49 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
         usingChainlinkTellorUntrusted
     }
 
-    // The current status of the PricFeed, which determines the conditions for the next price fetch attempt
+    // The current status of the ETH PricFeed, which determines the conditions for the next price fetch attempt
     Status public status;
 
     event LastGoodPriceUpdated(uint _lastGoodPrice);
+    event ASSETLastGoodPriceUpdated(uint _lastGoodPrice);
     event PriceFeedStatusChanged(Status newStatus);
 
     // --- Dependency setters ---
     
     function setAddresses(
-        address _priceAggregatorAddress,
+        address _ETHpriceAggregatorAddress,
+        address _ASSETpriceAggregatorAddress,
         address _tellorCallerAddress
     )
         external
         onlyOwner
     {
-        checkContract(_priceAggregatorAddress);
+        checkContract(_ETHpriceAggregatorAddress);
+        checkContract(_ASSETpriceAggregatorAddress);
         checkContract(_tellorCallerAddress);
        
-        priceAggregator = AggregatorV3Interface(_priceAggregatorAddress);
+        ETHpriceAggregator = AggregatorV3Interface(_ETHpriceAggregatorAddress);
+        ASSETpriceAggregator = AggregatorV3Interface(_ASSETpriceAggregatorAddress);
         tellorCaller = ITellorCaller(_tellorCallerAddress);
 
         // Explicitly set initial system status
         status = Status.chainlinkWorking;
 
         // Get an initial price from Chainlink to serve as first reference for lastGoodPrice
-        ChainlinkResponse memory chainlinkResponse = _getCurrentChainlinkResponse();
-        ChainlinkResponse memory prevChainlinkResponse = _getPrevChainlinkResponse(chainlinkResponse.roundId, chainlinkResponse.decimals);
+        ChainlinkResponse memory ETHchainlinkResponse = _getCurrentChainlinkResponse(ETHpriceAggregator);
+        ChainlinkResponse memory ASSETchainlinkResponse = _getCurrentChainlinkResponse(ASSETpriceAggregator);
+
+        ChainlinkResponse memory ETHprevChainlinkResponse = _getPrevChainlinkResponse(ETHpriceAggregator, ETHchainlinkResponse.roundId, ETHchainlinkResponse.decimals);
+        ChainlinkResponse memory ASSETprevChainlinkResponse = _getPrevChainlinkResponse(ASSETpriceAggregator, ASSETchainlinkResponse.roundId, ASSETchainlinkResponse.decimals);
         
-        require(!_chainlinkIsBroken(chainlinkResponse, prevChainlinkResponse) && !_chainlinkIsFrozen(chainlinkResponse), 
+        require(!_chainlinkIsBroken(ETHchainlinkResponse, ETHprevChainlinkResponse) && !_chainlinkIsFrozen(ETHchainlinkResponse), 
             "PriceFeed: Chainlink must be working and current");
 
-        _storeChainlinkPrice(chainlinkResponse);
+        require(!_chainlinkIsBroken(ASSETchainlinkResponse, ASSETprevChainlinkResponse) && !_chainlinkIsFrozen(ASSETchainlinkResponse), 
+            "PriceFeed: Chainlink must be working and current");
+
+        _storeChainlinkPrice(ETHchainlinkResponse);
+        _ASSETstoreChainlinkPrice(ASSETchainlinkResponse);
 
         _renounceOwnership();
     }
@@ -126,10 +143,44 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
     * it uses the last good price seen by Liquity.
     *
     */
+
     function fetchPrice() external override returns (uint) {
+        uint ETHPrice = ETHfetchPrice();
+        uint ASSETPrice = ASSETfetchPrice();
+
+        return _scaleChainlinkPriceByDigits(ETHPrice, 0).div(ASSETPrice);
+    }
+
+    function ASSETfetchPrice() internal returns(uint) {
+        ChainlinkResponse memory chainlinkResponse = _getCurrentChainlinkResponse(ASSETpriceAggregator);
+        ChainlinkResponse memory prevChainlinkResponse = _getPrevChainlinkResponse(ASSETpriceAggregator, chainlinkResponse.roundId, chainlinkResponse.decimals);
+
+        if (_chainlinkPriceChangeAboveMax(chainlinkResponse, prevChainlinkResponse)) {
+            isAssetFrozen = true;
+            return ASSETlastGoodPrice;
+        }
+
+        if (!isAssetFrozen) {
+            if (_chainlinkIsFrozen(chainlinkResponse)) {
+                isAssetFrozen = true;
+                return ASSETlastGoodPrice;
+            }
+            return _ASSETstoreChainlinkPrice(chainlinkResponse);
+        }
+
+        if (isAssetFrozen) {
+            if (chainlinkResponse.answer != prevChainlinkResponse.answer) {
+                isAssetFrozen = false;
+                return _ASSETstoreChainlinkPrice(chainlinkResponse);
+            }
+            return ASSETlastGoodPrice; 
+        }
+    }
+
+    function ETHfetchPrice() internal returns (uint) {
         // Get current and previous price data from Chainlink, and current price data from Tellor
-        ChainlinkResponse memory chainlinkResponse = _getCurrentChainlinkResponse();
-        ChainlinkResponse memory prevChainlinkResponse = _getPrevChainlinkResponse(chainlinkResponse.roundId, chainlinkResponse.decimals);
+        ChainlinkResponse memory chainlinkResponse = _getCurrentChainlinkResponse(ETHpriceAggregator);
+        ChainlinkResponse memory prevChainlinkResponse = _getPrevChainlinkResponse(ETHpriceAggregator, chainlinkResponse.roundId, chainlinkResponse.decimals);
         TellorResponse memory tellorResponse = _getCurrentTellorResponse();
 
         // --- CASE 1: System fetched last price from Chainlink  ---
@@ -471,6 +522,11 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
         emit LastGoodPriceUpdated(_currentPrice);
     }
 
+    function _ASSETstorePrice(uint _currentPrice) internal {
+        ASSETlastGoodPrice = _currentPrice;
+        emit ASSETLastGoodPriceUpdated(_currentPrice);
+    }
+
      function _storeTellorPrice(TellorResponse memory _tellorResponse) internal returns (uint) {
         uint scaledTellorPrice = _scaleTellorPriceByDigits(_tellorResponse.value);
         _storePrice(scaledTellorPrice);
@@ -481,6 +537,13 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
     function _storeChainlinkPrice(ChainlinkResponse memory _chainlinkResponse) internal returns (uint) {
         uint scaledChainlinkPrice = _scaleChainlinkPriceByDigits(uint256(_chainlinkResponse.answer), _chainlinkResponse.decimals);
         _storePrice(scaledChainlinkPrice);
+
+        return scaledChainlinkPrice;
+    }
+
+    function _ASSETstoreChainlinkPrice(ChainlinkResponse memory _chainlinkResponse) internal returns (uint) {
+        uint scaledChainlinkPrice = _scaleChainlinkPriceByDigits(uint256(_chainlinkResponse.answer), _chainlinkResponse.decimals);
+        _ASSETstorePrice(scaledChainlinkPrice);
 
         return scaledChainlinkPrice;
     }
@@ -508,7 +571,7 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
         }
     }
 
-    function _getCurrentChainlinkResponse() internal view returns (ChainlinkResponse memory chainlinkResponse) {
+    function _getCurrentChainlinkResponse(AggregatorV3Interface priceAggregator) internal view returns (ChainlinkResponse memory chainlinkResponse) {
         // First, try to get current decimal precision:
         try priceAggregator.decimals() returns (uint8 decimals) {
             // If call to Chainlink succeeds, record the current decimal precision
@@ -540,7 +603,7 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
         }
     }
 
-    function _getPrevChainlinkResponse(uint80 _currentRoundId, uint8 _currentDecimals) internal view returns (ChainlinkResponse memory prevChainlinkResponse) {
+    function _getPrevChainlinkResponse(AggregatorV3Interface priceAggregator, uint80 _currentRoundId, uint8 _currentDecimals) internal view returns (ChainlinkResponse memory prevChainlinkResponse) {
         /*
         * NOTE: Chainlink only offers a current decimals() value - there is no way to obtain the decimal precision used in a 
         * previous round.  We assume the decimals used in the previous round are the same as the current round.
