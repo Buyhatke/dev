@@ -46,9 +46,12 @@ contract CommunityIssuance is ICommunityIssuance, Ownable, CheckContract, BaseMa
 
     ILQTYToken public lqtyToken;
 
-    address public stabilityPoolAddress;
+    //address public stabilityPoolAddress;
+    mapping (address => bool) public stabilityPoolAddress;
+    mapping (address => uint) public claimedTill;
 
     uint public totalLQTYIssued;
+    uint public totalStabilityPools;
     uint public immutable deploymentTime;
 
     // --- Events ---
@@ -76,7 +79,9 @@ contract CommunityIssuance is ICommunityIssuance, Ownable, CheckContract, BaseMa
         checkContract(_stabilityPoolAddress);
 
         lqtyToken = ILQTYToken(_lqtyTokenAddress);
-        stabilityPoolAddress = _stabilityPoolAddress;
+        // stabilityPoolAddress = _stabilityPoolAddress;
+        stabilityPoolAddress[_stabilityPoolAddress] = true;
+        totalStabilityPools = 1;
 
         // When LQTYToken deployed, it should have transferred CommunityIssuance's LQTY entitlement
         uint LQTYBalance = lqtyToken.balanceOf(address(this));
@@ -85,15 +90,35 @@ contract CommunityIssuance is ICommunityIssuance, Ownable, CheckContract, BaseMa
         emit LQTYTokenAddressSet(_lqtyTokenAddress);
         emit StabilityPoolAddressSet(_stabilityPoolAddress);
 
-        _renounceOwnership();
+        // _renounceOwnership();
+    }
+
+
+    function addStabilityPool
+    (
+        address _stabilityPoolAddress
+    ) 
+        external 
+        onlyOwner 
+        override 
+    {
+        checkContract(_stabilityPoolAddress);
+
+        stabilityPoolAddress[_stabilityPoolAddress] = true;
+        totalStabilityPools += 1;
+        claimedTill[_stabilityPoolAddress] = totalLQTYIssued;
+
+        emit StabilityPoolAddressSet(_stabilityPoolAddress);
+
     }
 
     function issueLQTY() external override returns (uint) {
         _requireCallerIsStabilityPool();
 
         uint latestTotalLQTYIssued = LQTYSupplyCap.mul(_getCumulativeIssuanceFraction()).div(DECIMAL_PRECISION);
-        uint issuance = latestTotalLQTYIssued.sub(totalLQTYIssued);
-
+        // uint issuance = latestTotalLQTYIssued.sub(totalLQTYIssued);
+        uint issuance = latestTotalLQTYIssued.sub(claimedTill[msg.sender]).div(totalStabilityPools);
+        claimedTill[msg.sender] = latestTotalLQTYIssued;
         totalLQTYIssued = latestTotalLQTYIssued;
         emit TotalLQTYIssuedUpdated(latestTotalLQTYIssued);
         
@@ -127,6 +152,7 @@ contract CommunityIssuance is ICommunityIssuance, Ownable, CheckContract, BaseMa
     // --- 'require' functions ---
 
     function _requireCallerIsStabilityPool() internal view {
-        require(msg.sender == stabilityPoolAddress, "CommunityIssuance: caller is not SP");
+        // require(msg.sender == stabilityPoolAddress, "CommunityIssuance: caller is not SP");
+        require(stabilityPoolAddress[msg.sender], "CommunityIssuance: caller is not one of the SP");
     }
 }
