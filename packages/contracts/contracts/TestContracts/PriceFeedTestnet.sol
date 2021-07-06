@@ -12,6 +12,8 @@ contract PriceFeedTestnet is IPriceFeed {
     
     uint256 private _price = 200 * 1e18;
 
+    bool public override isAssetFrozen;
+
     // --- Functions ---
 
     // View price getter for simplicity in tests
@@ -30,5 +32,9 @@ contract PriceFeedTestnet is IPriceFeed {
     function setPrice(uint256 price) external returns (bool) {
         _price = price;
         return true;
+    }
+
+    function setIsAssetFrozen(bool flag) external {
+        isAssetFrozen = flag;
     }
 }

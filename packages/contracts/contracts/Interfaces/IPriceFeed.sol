@@ -9,4 +9,5 @@ interface IPriceFeed {
    
     // --- Function ---
     function fetchPrice() external returns (uint);
+    function isAssetFrozen() external view returns (bool);
 }

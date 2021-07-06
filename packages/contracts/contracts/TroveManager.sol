@@ -228,6 +228,13 @@ contract TroveManager is LiquityBase, Ownable, CheckContract, ITroveManager {
         redeemCollateral
     }
 
+    // modifiers
+
+    modifier isAssetFrozen() {
+        require (priceFeed.isAssetFrozen() == false, "BorrowerOperations: price feed frozen");
+        _;
+    }
+
 
     // --- Dependency setter ---
 
@@ -927,6 +934,7 @@ contract TroveManager is LiquityBase, Ownable, CheckContract, ITroveManager {
     )
         external
         override
+        isAssetFrozen
     {
         ContractsCache memory contractsCache = ContractsCache(
             activePool,

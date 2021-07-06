@@ -57,7 +57,7 @@ contract PriceFeed is Ownable, CheckContract, BaseMath, IPriceFeed {
     // The last ASSET good price seen from an oracle by Liquity
     uint public ASSETlastGoodPrice;
 
-    bool public isAssetFrozen;
+    bool public override isAssetFrozen;
 
     struct ChainlinkResponse {
         uint80 roundId;
